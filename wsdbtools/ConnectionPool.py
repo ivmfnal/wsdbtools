@@ -46,7 +46,7 @@ class _WrappedConnection(object):
         return "WrappedConnection(%s)" % (self.Connection,)
 
     def _done(self):
-        print("_WrappedConnection: _done()")
+        #print("_WrappedConnection: _done()")
         if self.Pool is not None:
             self.Pool.returnConnection(self.Connection)
             self.Pool = None
@@ -71,9 +71,9 @@ class _WrappedConnection(object):
     # If used as is, instead of deleting the connection, give it back to the pool
     #
     def __del__(self):
-        print("_WrappedConnection: __del__()...")
+        #print("_WrappedConnection: __del__()...")
         self._done()
-        print("_WrappedConnection: __del__()")
+        #print("_WrappedConnection: __del__()")
     
     def close(self):
         if self.Connection is not None:
@@ -120,13 +120,13 @@ class DummyConnection(object):
             self.ID = DummyConnection.NextID
             DummyConnection.NextID += 1
 
-        print ("Connection created: >> %s" % (self,))
+        #print ("Connection created: >> %s" % (self,))
 
     def __str__(self):
         return "<connection %d>" % (self.ID,)
         
     def close(self):
-        print ("Connection closed:  << %s" % (self,))
+        #print ("Connection closed:  << %s" % (self,))
         with self.Lock:
             DummyConnection.Count -= 1
         
@@ -243,14 +243,14 @@ class ConnectionPool(Thread):
         return self.connect().cursor()
 
     def returnConnection(self, c):
-        print("returnConnection() ...")
+        #print("returnConnection() ...")
         if not self.Connector.connectionIsClosed(c):
             if len(self.IdleConnections) >= self.MaxIdleConnections:
                 c.close()
             elif all(c is not x.Connection for x in self.IdleConnections):
                 with self.Lock:
                     self.IdleConnections.append(_IdleConnection(c))
-        print("returnConnection() exit")
+        #print("returnConnection() exit")
 
 if __name__ == "__main__":
     #
