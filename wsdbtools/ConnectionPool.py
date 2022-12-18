@@ -241,6 +241,11 @@ class ConnectionPool(Thread):
 
     def cursor(self):
         return self.connect().cursor()
+        
+    def transaction(self):
+        return self.connect().transaction()
+        
+    txn = transaction
 
     def returnConnection(self, c):
         #print("returnConnection() ...")
