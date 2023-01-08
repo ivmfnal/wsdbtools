@@ -1,5 +1,7 @@
 import time
-from threading import RLock, Thread
+from pythreader import Primitive, schedule_job, synchronized, __version__ as pythreader_version
+assert pythreader_version >= "2.9.0", f"pythreader version >= 2.9.0 is required. Installed: {pythreader_version}"
+
 from .transaction import Transaction
 
 class _WrappedCursor(object):
@@ -108,40 +110,6 @@ class ConnectorBase(object):
     def connectionIsClosed(self, c):
         raise NotImplementedError
         
-class DummyConnection(object):
-
-    Lock = RLock()
-    Count = 0
-    NextID = 1
-
-    def __init__(self):
-        with DummyConnection.Lock:
-            DummyConnection.Count += 1
-            self.ID = DummyConnection.NextID
-            DummyConnection.NextID += 1
-
-        #print ("Connection created: >> %s" % (self,))
-
-    def __str__(self):
-        return "<connection %d>" % (self.ID,)
-        
-    def close(self):
-        #print ("Connection closed:  << %s" % (self,))
-        with self.Lock:
-            DummyConnection.Count -= 1
-        
-
-class DummyConnector(ConnectorBase):
-
-    def connect(self):
-        return DummyConnection()
-        
-    def probe(self, connection):
-        return True
-        
-    def connectionIsClosed(self, connection):
-        return False
-
 class PsycopgConnector(ConnectorBase):
 
     def __init__(self, connstr):
@@ -168,9 +136,8 @@ class PsycopgConnector(ConnectorBase):
 class MySQLConnector(ConnectorBase):
     def __init__(self, connstr):
         raise NotImplementedError
-        
-              
-class ConnectionPool(PyThread):      
+
+class ConnectionPool(Primitive):      
 
     def __init__(self, postgres=None, mysql=None, connector=None, 
                 idle_timeout = 30, max_idle_connections = 1):
@@ -178,7 +145,7 @@ class ConnectionPool(PyThread):
         if postgres:
             keep_words = sorted([w for w in postgres.split() if not (w.startswith("password=") or w.startswith("user=")])
             my_name = "ConnectionPool(postgres:%s)" % (" ".join(keep_words),)
-        PyThread.__init__(self, name=my_name, daemon=True)
+        Primitive.__init__(self, name=my_name)
         self.IdleTimeout = idle_timeout
         if connector is not None:
             self.Connector = connector
@@ -189,60 +156,53 @@ class ConnectionPool(PyThread):
         else:
             raise ValueError("Connector must be provided")
         self.IdleConnections = []           # [_IdleConnection(c), ...]
-        self.Lock = RLock()
         self.MaxIdleConnections = max_idle_connections
         self.Closed = False
-        self.start()
-        
+        self.CleanUpJob = schedule_job(self.clean_up, interval=self.IdleTimeout/5)
+    
+    @synchronized
     def close_idle(self):
-        with self.Lock:
-            for ic in self.IdleConnections:
-                ic.Connection.close()
-            self.IdleConnections = []
+        for ic in self.IdleConnections:
+            ic.Connection.close()
+        self.IdleConnections = []
 
+    @synchronized
     def clean_up(self):
-        with self.Lock:
-            now = time.time()
-            #print("cleanUp: idle connections: %d %x %s" % (len(self.IdleConnections), id(self.IdleConnections), self.IdleConnections))
-            new_list = []
-            for ic in self.IdleConnections:
-                t = ic.IdleSince
-                c = ic.Connection
-                if t < now - self.IdleTimeout:
-                    #print ("closing idle connection %x" % (id(c),))
-                    c.close()
-                else:
-                    new_list.append(ic)
-            self.IdleConnections = new_list
-
-    def run(self):
-        while not self.Closed:
-            time.sleep(self.IdleTimeout/5)
-            self.clean_up()
+        now = time.time()
+        #print("cleanUp: idle connections: %d %x %s" % (len(self.IdleConnections), id(self.IdleConnections), self.IdleConnections))
+        new_list = []
+        for ic in self.IdleConnections:
+            t = ic.IdleSince
+            c = ic.Connection
+            if t < now - self.IdleTimeout:
+                #print ("closing idle connection %x" % (id(c),))
+                c.close()
+            else:
+                new_list.append(ic)
+        self.IdleConnections = new_list
 
     def idleCount(self):
-        with self.Lock:
-            return len(self.IdleConnections)
+        return len(self.IdleConnections)
 
+    @synchronized
     def connect(self):
-        with self.Lock:
-            if self.Closed:
-                raise RuntimeError("Connection pool is closed")
-            use_connection = None
-            #print "connect(): Connections=", self.IdleConnections
-            while self.IdleConnections:
-                c = self.IdleConnections.pop().Connection
-                if self.Connector.probe(c):
-                    use_connection = c
-                    #print ("connect: reuse idle connection %s" % (c,))
-                    break
-                else:
-                    c.close()       # connection is bad
+        if self.Closed:
+            raise RuntimeError("Connection pool is closed")
+        use_connection = None
+        #print "connect(): Connections=", self.IdleConnections
+        while self.IdleConnections:
+            c = self.IdleConnections.pop().Connection
+            if self.Connector.probe(c):
+                use_connection = c
+                #print ("connect: reuse idle connection %s" % (c,))
+                break
             else:
-                # no connection found
-                use_connection = self.Connector.connect()
-                #print ("connect: new connection %s" % (use_connection,))
-            return _WrappedConnection(self, use_connection)
+                c.close()       # connection is bad
+        else:
+            # no connection found
+            use_connection = self.Connector.connect()
+            #print ("connect: new connection %s" % (use_connection,))
+        return _WrappedConnection(self, use_connection)
 
     def cursor(self):
         return self.connect().cursor()
@@ -255,82 +215,19 @@ class ConnectionPool(PyThread):
     def returnConnection(self, c):
         #print("returnConnection() ...")
         if not self.Connector.connectionIsClosed(c):
-            with self.Lock:
+            with self:
                 if len(self.IdleConnections) >= self.MaxIdleConnections or self.Closed:
                     c.close()
                 elif all(c is not x.Connection for x in self.IdleConnections):
                     self.IdleConnections.append(_IdleConnection(c))
         #print("returnConnection() exit")
 
+    @synchronized
     def close(self):
-        with self.Lock:
             self.Closed = True
             self.close_idle()
+            self.CleanUpJob.cancel()
             
     def __del__(self):
         self.close()
 
-if __name__ == "__main__":
-    #
-    # test
-    #
-    import time, random
-    
-    class DummyConnection(object):
-    
-        Lock = RLock()
-        Count = 0
-    
-        def __init__(self):
-            print ("Connection created: >> %x" % (id(self),))
-            with self.Lock:
-                DummyConnection.Count += 1
-            
-        def close(self):
-            print ("Connection closed:  << %x" % (id(self),))
-            with self.Lock:
-                DummyConnection.Count -= 1
-            
-    
-    class DummyConnector(ConnectorBase):
-    
-        def connect(self):
-            return DummyConnection()
-            
-        def probe(self, connection):
-            return True
-            
-        def connectionIsClosed(self, connection):
-            return False
-            
-    class Client(Thread):
-    
-        def __init__(self, pool):
-            Thread.__init__(self)
-            self.Pool = pool
-    
-        def run(self):
-            for _ in range(10):
-                time.sleep(random.random()*1.0)
-                c = pool.connect()
-                time.sleep(random.random()*1.0)
-                #c.close()
-            print ("thread is done")
-    
-    pool = ConnectionPool(connector=DummyConnector(), idle_timeout = 5)
-    
-    clients = [Client(pool) for _ in range(5)]
-    for c in clients:
-        c.start()
-        
-    t0 = time.time()
-    
-    while True:
-        print ("idle count:", pool.idleCount(), "     open count:", DummyConnection.Count)
-        time.sleep(3)
-    
-    
-    
-    
-    
-    
