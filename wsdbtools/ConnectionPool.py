@@ -170,11 +170,15 @@ class MySQLConnector(ConnectorBase):
         raise NotImplementedError
         
               
-class ConnectionPool(Thread):      
+class ConnectionPool(PyThread):      
 
     def __init__(self, postgres=None, mysql=None, connector=None, 
                 idle_timeout = 30, max_idle_connections = 1):
-        Thread.__init__(self, daemon=True)
+        my_name = "ConnectionPool"
+        if postgres:
+            keep_words = sorted([w for w in postgres.split() if not (w.startswith("password=") or w.startswith("user=")])
+            my_name = "ConnectionPool(postgres:%s)" % (" ".join(keep_words),)
+        PyThread.__init__(self, name=my_name, daemon=True)
         self.IdleTimeout = idle_timeout
         if connector is not None:
             self.Connector = connector
@@ -187,12 +191,11 @@ class ConnectionPool(Thread):
         self.IdleConnections = []           # [_IdleConnection(c), ...]
         self.Lock = RLock()
         self.MaxIdleConnections = max_idle_connections
-        self.Stop = False
         self.Closed = False
         self.start()
         
     def close_idle(self):
-        with self.Losk:
+        with self.Lock:
             for ic in self.IdleConnections:
                 ic.Connection.close()
             self.IdleConnections = []
@@ -213,7 +216,7 @@ class ConnectionPool(Thread):
             self.IdleConnections = new_list
 
     def run(self):
-        while not self.Stop:
+        while not self.Closed:
             time.sleep(self.IdleTimeout/5)
             self.clean_up()
 
@@ -223,6 +226,8 @@ class ConnectionPool(Thread):
 
     def connect(self):
         with self.Lock:
+            if self.Closed:
+                raise RuntimeError("Connection pool is closed")
             use_connection = None
             #print "connect(): Connections=", self.IdleConnections
             while self.IdleConnections:
@@ -250,12 +255,20 @@ class ConnectionPool(Thread):
     def returnConnection(self, c):
         #print("returnConnection() ...")
         if not self.Connector.connectionIsClosed(c):
-            if len(self.IdleConnections) >= self.MaxIdleConnections:
-                c.close()
-            elif all(c is not x.Connection for x in self.IdleConnections):
-                with self.Lock:
+            with self.Lock:
+                if len(self.IdleConnections) >= self.MaxIdleConnections or self.Closed:
+                    c.close()
+                elif all(c is not x.Connection for x in self.IdleConnections):
                     self.IdleConnections.append(_IdleConnection(c))
         #print("returnConnection() exit")
+
+    def close(self):
+        with self.Lock:
+            self.Closed = True
+            self.close_idle()
+            
+    def __del__(self):
+        self.close()
 
 if __name__ == "__main__":
     #
