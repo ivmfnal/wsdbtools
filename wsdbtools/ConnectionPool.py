@@ -143,7 +143,7 @@ class ConnectionPool(Primitive):
                 idle_timeout = 30, max_idle_connections = 1):
         my_name = "ConnectionPool"
         if postgres:
-            keep_words = sorted([w for w in postgres.split() if not (w.startswith("password=") or w.startswith("user=")])
+            keep_words = sorted([w for w in postgres.split() if not (w.startswith("password=") or w.startswith("user="))])
             my_name = "ConnectionPool(postgres:%s)" % (" ".join(keep_words),)
         Primitive.__init__(self, name=my_name)
         self.IdleTimeout = idle_timeout
