@@ -1,6 +1,6 @@
 import time
 from pythreader import Primitive, schedule_job, synchronized, version_info as pythreader_version
-assert pythreader_version >= (2.9.0), f"pythreader version >= 2.9.0 is required. Installed: {pythreader_version}"
+assert pythreader_version >= (2,9,0), f"pythreader version >= 2.9.0 is required. Installed: {pythreader_version}"
 
 from .transaction import Transaction
 
