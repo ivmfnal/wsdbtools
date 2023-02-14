@@ -61,11 +61,12 @@ class Request(Task):
 
     def run(self):
         try:	
-            resp = urlopen(self.URL, timeout=30.0)
-            status = resp.getcode()
-            size = len(resp.read())
-        except:
-            pass
+            resp = requests.get(self.URL)
+            status = resp.status_code
+            size = len(resp.text)
+            print(self.URL, status, size)
+        except Exception as e:
+            print(e)
         self.Meter.tick()
 
 meter = FrequencyMeter()
