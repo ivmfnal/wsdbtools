@@ -1,6 +1,6 @@
 import time
-from pythreader import Primitive, schedule_job, synchronized, version_info as pythreader_version
-assert pythreader_version >= (2,9,0), f"pythreader version >= 2.9.0 is required. Installed: {pythreader_version}"
+from pythreader import Primitive, schedule_task, synchronized, version_info as pythreader_version
+assert pythreader_version >= (2,11,0), f"pythreader version >= 2.11.0 is required. Installed: {pythreader_version}"
 
 from .transaction import Transaction
 
@@ -158,7 +158,7 @@ class ConnectionPool(Primitive):
         self.IdleConnections = []           # [_IdleConnection(c), ...]
         self.MaxIdleConnections = max_idle_connections
         self.Closed = False
-        self.CleanUpJob = schedule_job(self.clean_up, interval=self.IdleTimeout/5)
+        self.CleanUpJob = schedule_task(self.clean_up, interval=self.IdleTimeout/5)
     
     @synchronized
     def close_idle(self):
