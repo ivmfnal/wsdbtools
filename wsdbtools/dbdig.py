@@ -44,7 +44,7 @@ class DbDigPostgres(DbDigImpl):
         Find all databases
         """
         c = self.Conn.cursor()
-        sql = """select datname from %s""" % ('pg_database',)
+        sql = """select datname from pg_database"""
 
         c.execute(sql)
         dd = c.fetchall()
@@ -76,9 +76,15 @@ class DbDigPostgres(DbDigImpl):
         Find all tables
         """
         c = self.Conn.cursor()
-        sql = """select relname from pg_class where relnamespace=(select OID from pg_namespace where nspname='%s') and relkind='r'""" % (nspace,)
+        sql = """select c.relname 
+                    from pg_class c, pg_namespace n
+                    where c.relnamespace = n.OID
+                        and n.nspname = %s
+                        and c.relkind='r'
+        """
+        #            (select OID from pg_namespace where nspname=%s) and relkind='r'""" 
 
-        c.execute(sql)
+        c.execute(sql, (nspace,))
         dd = c.fetchall()
         c.close()
         if dd:
@@ -99,12 +105,12 @@ class DbDigPostgres(DbDigImpl):
            WHERE d.adrelid = a.attrelid AND d.adnum = a.attnum AND a.atthasdef) as "Modifiers",
           a.attnotnull as "Not NULL", pg_catalog.col_description(a.attrelid, a.attnum) as "Description"
         FROM pg_catalog.pg_attribute a
-        WHERE a.attrelid = (select OID from pg_catalog.pg_class where relnamespace=(select OID from pg_namespace where nspname='%s') and relname='%s')
+        WHERE a.attrelid = (select OID from pg_catalog.pg_class where relnamespace=(select OID from pg_namespace where nspname=%s) and relname=%s)
           AND a.attnum > 0 AND NOT a.attisdropped
         ORDER BY a.attnum;
-        """ % (nspace, table, )
+        """
 
-        c.execute(sql)
+        c.execute(sql, (nspace, table))
         dd = c.fetchall()
         c.close()
         if dd:
@@ -119,10 +125,9 @@ class DbDigPostgres(DbDigImpl):
         """
         nspace, table = self.getTableNameSpace(nspace, table)
         c = self.Conn.cursor()
-        sql = """SELECT indexname,indexdef FROM pg_indexes WHERE schemaname='%s' AND tablename = '%s'
-             """ % (nspace, table, )
+        sql = "SELECT indexname,indexdef FROM pg_indexes WHERE schemaname=%s AND tablename = %s" 
 
-        c.execute(sql)
+        c.execute(sql, (nspace, table))
         dd = c.fetchall()
         c.close()
         if dd:
@@ -137,10 +142,10 @@ class DbDigPostgres(DbDigImpl):
         """
         nspace, table = self.getTableNameSpace(nspace, table)
         c = self.Conn.cursor()
-        sql = """SELECT constraint_name FROM information_schema.table_constraints WHERE table_schema='%s' AND table_name='%s' AND constraint_type='PRIMARY KEY'
-             """ % (nspace, table, )
+        sql = """SELECT constraint_name FROM information_schema.table_constraints WHERE table_schema=%s AND table_name=%s AND constraint_type='PRIMARY KEY'
+             """
 
-        c.execute(sql)
+        c.execute(sql, (nspace, table))
         dd = c.fetchall()
         c.close()
         if dd:
@@ -156,10 +161,10 @@ class DbDigPostgres(DbDigImpl):
         """
         nspace, table = self.getTableNameSpace(nspace, table)
         c = self.Conn.cursor()
-        sql = """SELECT constraint_name FROM information_schema.table_constraints WHERE table_schema='%s' AND table_name='%s' AND constraint_type='FOREIGN KEY'
-             """ % (nspace, table, )
+        sql = """SELECT constraint_name FROM information_schema.table_constraints WHERE table_schema=%s AND table_name=%s AND constraint_type='FOREIGN KEY'
+             """
 
-        c.execute(sql)
+        c.execute(sql, (nspace, table))
         dd = c.fetchall()
         c.close()
         if dd:
@@ -181,11 +186,11 @@ class DbDigPostgres(DbDigImpl):
         nspace, table = self.getTableNameSpace(nspace, table)
         c = self.Conn.cursor()
         sql = """SELECT constraint_name FROM information_schema.table_constraints WHERE
-                 table_schema='%s' AND constraint_type='FOREIGN KEY' AND constraint_name IN 
-                (SELECT constraint_name  FROM information_schema.constraint_table_usage WHERE table_schema='%s' AND table_name='%s') ORDER BY table_name
-              """ % (nspace, nspace, table, )
+                 table_schema=%s AND constraint_type='FOREIGN KEY' AND constraint_name IN 
+                (SELECT constraint_name  FROM information_schema.constraint_table_usage WHERE table_schema=%s AND table_name=%s) ORDER BY table_name
+              """
 
-        c.execute(sql)
+        c.execute(sql, (nspace, nspace, table))
         dd = c.fetchall()
         c.close()
         if dd:
@@ -206,9 +211,9 @@ class DbDigPostgres(DbDigImpl):
         # Referring table
         c = self.Conn.cursor()
         sql = """SELECT table_name, column_name FROM information_schema.key_column_usage
-                WHERE table_schema='%s' AND constraint_name='%s'
-              """ % (nspace, kname, )
-        c.execute(sql)
+                WHERE table_schema=%s AND constraint_name=%s
+              """
+        c.execute(sql, (nspace, kname))
         rr = c.fetchall()
         if rr:
           rtname = rr[0][0]
@@ -219,7 +224,7 @@ class DbDigPostgres(DbDigImpl):
         #sql = """SELECT table_name, column_name FROM information_schema.constraint_column_usage
         #        WHERE table_schema='%s' AND constraint_name='%s'
         #      """ % (nspace, kname, )
-        sql =   """select table_name, column_name from
+        sql = """select table_name, column_name from
                         (SELECT nr.nspname, r.relname, a.attname, c.conname
                           FROM pg_namespace nr, pg_class r, pg_attribute a,
                                 pg_namespace nc, pg_constraint c
@@ -233,9 +238,9 @@ class DbDigPostgres(DbDigImpl):
                                 (ARRAY['p'::"char", 'u'::"char", 'f'::"char"])) AND r.relkind =
                                 'r'::"char") 
                         as x(namespace, table_name, column_name, constraint_name)
-                where namespace='%s' and constraint_name='%s'""" % (nspace, kname,)
+                where namespace=%s and constraint_name=%s""" 
 
-        c.execute(sql)
+        c.execute(sql, (nspace, kname))
         pp = c.fetchall()
         if pp:
           ptname = pp[0][0]
