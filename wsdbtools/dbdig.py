@@ -38,17 +38,6 @@ class DbDigPostgres(DbDigImpl):
         """
         """
         self.Conn = conn
-        self.Dsn = {}
-        dsn = self.Conn.dsn
-        dsn = dsn.split(' ')
-        for v in dsn:
-            v = v.split('=')
-            if v[0] == 'password':
-                continue
-            self.Dsn[v[0]] = v[1]
-
-    def dsn(self):
-        return self.Dsn
 
     def dbases(self):
         """
@@ -120,7 +109,6 @@ class DbDigPostgres(DbDigImpl):
         c.close()
         if dd:
             return dd
-###            return pp(c, dd)
         else:
             return []
 
