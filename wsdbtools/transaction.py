@@ -38,8 +38,8 @@ class Transaction(object):
         if exc_type is not None:
             self.Exc = (exc_type, exc_value, traceback)
             self.rollback()
-        else:
-            self.commit()
+        #else:  do not do commit here. Do it in the __del__ method instead
+        #    self.commit()
             
     def __getattr__(self, name):
         return getattr(self.Cursor, name)
@@ -55,6 +55,7 @@ class Transaction(object):
         return self.cursor_iterator()
         
     def __del__(self):
+        #print("Transaction __del__")
         if self.InTransaction:
             if self.OnDelete == "commit":
                 self.commit()
