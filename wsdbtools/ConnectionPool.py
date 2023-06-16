@@ -112,16 +112,26 @@ class ConnectorBase(object):
         
 class PsycopgConnector(ConnectorBase):
 
-    def __init__(self, connstr, schema=None):
+    def __init__(self, connspec, schema=None):
         ConnectorBase.__init__(self)
-        self.Connstr = connstr
+        if isinstance(connspec, dict):
+            if "url" in connspec:
+                self.Connstr = connspec["url"]
+            else:
+                self.Connstr = "host=%(host)s port=%(port)s dbname=%(dbname)s user=%(user)s" % connspec
+                if "password" in connspec:
+                    self.Connstr += " password=%(password)s" % connspec
+            schema = schema or connspec.get("schema")
+        else:
+            # assume str
+            self.Connstr = connspec
         self.Schema = schema
-        
+    
     def connect(self):
         import psycopg2
         conn = psycopg2.connect(self.Connstr)
         if self.Schema:
-            conn.cursor().execute("set schema %s", (self.Schema,))
+            conn.cursor().execute(f"set search_path to {self.Schema}")
         return conn
         
     def connectionIsClosed(self, conn):
@@ -146,9 +156,6 @@ class ConnectionPool(Primitive):
     def __init__(self, postgres=None, mysql=None, connector=None, 
                 idle_timeout = 30, max_idle_connections = 1, schema=None):
         my_name = "ConnectionPool"
-        if postgres:
-            keep_words = sorted([w for w in postgres.split() if not (w.startswith("password=") or w.startswith("user="))])
-            my_name = "ConnectionPool(postgres:%s)" % (" ".join(keep_words),)
         Primitive.__init__(self, name=my_name)
         self.IdleTimeout = idle_timeout
         if connector is not None:
