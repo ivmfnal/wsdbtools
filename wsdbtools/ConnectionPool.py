@@ -112,13 +112,17 @@ class ConnectorBase(object):
         
 class PsycopgConnector(ConnectorBase):
 
-    def __init__(self, connstr):
+    def __init__(self, connstr, schema=None):
         ConnectorBase.__init__(self)
         self.Connstr = connstr
+        self.Schema = schema
         
     def connect(self):
         import psycopg2
-        return psycopg2.connect(self.Connstr)
+        conn = psycopg2.connect(self.Connstr)
+        if self.Schema:
+            conn.cursor.execute("set schema %s", (self.Schema,))
+        return conn
         
     def connectionIsClosed(self, conn):
         return conn.closed
@@ -134,13 +138,13 @@ class PsycopgConnector(ConnectorBase):
             return False
             
 class MySQLConnector(ConnectorBase):
-    def __init__(self, connstr):
+    def __init__(self, connstr, schema=None):
         raise NotImplementedError
 
 class ConnectionPool(Primitive):      
 
     def __init__(self, postgres=None, mysql=None, connector=None, 
-                idle_timeout = 30, max_idle_connections = 1):
+                idle_timeout = 30, max_idle_connections = 1, schema=None):
         my_name = "ConnectionPool"
         if postgres:
             keep_words = sorted([w for w in postgres.split() if not (w.startswith("password=") or w.startswith("user="))])
@@ -150,9 +154,9 @@ class ConnectionPool(Primitive):
         if connector is not None:
             self.Connector = connector
         elif postgres is not None:
-            self.Connector = PsycopgConnector(postgres)
+            self.Connector = PsycopgConnector(postgres, schema)
         elif mysql is not None:
-            self.Connector = MySQLConnector(mysql)
+            self.Connector = MySQLConnector(mysql, schema)
         else:
             raise ValueError("Connector must be provided")
         self.IdleConnections = []           # [_IdleConnection(c), ...]
