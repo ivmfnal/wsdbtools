@@ -121,7 +121,7 @@ class PsycopgConnector(ConnectorBase):
         import psycopg2
         conn = psycopg2.connect(self.Connstr)
         if self.Schema:
-            conn.cursor.execute("set schema %s", (self.Schema,))
+            conn.cursor().execute("set schema %s", (self.Schema,))
         return conn
         
     def connectionIsClosed(self, conn):
