@@ -131,7 +131,7 @@ class PsycopgConnector(ConnectorBase):
         import psycopg2
         conn = psycopg2.connect(self.Connstr)
         if self.Schema:
-            conn.cursor().execute(f"set search_path to {self.Schema}")
+            conn.cursor().execute(f"set session schema '{self.Schema}'")
         return conn
         
     def connectionIsClosed(self, conn):
