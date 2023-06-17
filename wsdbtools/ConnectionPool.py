@@ -143,16 +143,19 @@ class PsycopgConnector(ConnectorBase):
         
     def probe(self, conn):
         try:
+            try:
+                # roll back unfinished transaction, if any, and ignore any errors
+                conn.rollback()
+            except:
+                pass
+            # check if the transaction is alive
             c = conn.cursor()
             c.execute("select 1")
             alive = c.fetchone()[0] == 1
-            
-            #c.execute("select current_schema()")
-            #print("after select 1:", c.fetchone()[0])
-            
-            #if self.Schema:
-            #    c.execute(f"set session schema '{self.Schema}'")
 
+            # make sure to set the right schema
+            if alive and self.Schema:
+                c.execute(f"set session schema '{self.Schema}'")
             return alive
         except Exception as e:
             #print("probe: exception:", e)
@@ -191,7 +194,6 @@ class ConnectionPool(Primitive):
     @synchronized
     def clean_up(self):
         now = time.time()
-        #print("cleanUp: idle connections: %d %x %s" % (len(self.IdleConnections), id(self.IdleConnections), self.IdleConnections))
         new_list = []
         for ic in self.IdleConnections:
             t = ic.IdleSince
@@ -228,10 +230,10 @@ class ConnectionPool(Primitive):
 
     def cursor(self):
         return self.connect().cursor()
-        
+
     def transaction(self):
         return self.connect().transaction()
-        
+
     txn = transaction
 
     def returnConnection(self, c):
@@ -250,7 +252,7 @@ class ConnectionPool(Primitive):
             self.Closed = True
             self.close_idle()
             self.CleanUpJob.cancel()
-            
+
     def __del__(self):
         self.close()
 
