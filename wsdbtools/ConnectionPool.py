@@ -73,9 +73,7 @@ class _WrappedConnection(object):
     # If used as is, instead of deleting the connection, give it back to the pool
     #
     def __del__(self):
-        #print("_WrappedConnection: __del__()...")
         self._done()
-        #print("_WrappedConnection: __del__()")
     
     def close(self):
         if self.Connection is not None:
@@ -131,6 +129,12 @@ class PsycopgConnector(ConnectorBase):
         import psycopg2
         conn = psycopg2.connect(self.Connstr)
         if self.Schema:
+            try:
+                # psycopg opens new transaction once new connection is created
+                # this transaction has to be closed so that the following "set schema" has "global" effect
+                conn.rollback()         
+            except:
+                pass
             conn.cursor().execute(f"set session schema '{self.Schema}'")
         return conn
         
@@ -140,11 +144,18 @@ class PsycopgConnector(ConnectorBase):
     def probe(self, conn):
         try:
             c = conn.cursor()
-            c.execute("rollback; select 1")
+            c.execute("select 1")
             alive = c.fetchone()[0] == 1
-            c.execute("rollback")
+            
+            #c.execute("select current_schema()")
+            #print("after select 1:", c.fetchone()[0])
+            
+            #if self.Schema:
+            #    c.execute(f"set session schema '{self.Schema}'")
+
             return alive
-        except:
+        except Exception as e:
+            #print("probe: exception:", e)
             return False
             
 class MySQLConnector(ConnectorBase):
@@ -227,6 +238,7 @@ class ConnectionPool(Primitive):
         #print("returnConnection() ...")
         if not self.Connector.connectionIsClosed(c):
             with self:
+                #print("returnConnection: idle connections:", len(self.IdleConnections))
                 if len(self.IdleConnections) >= self.MaxIdleConnections or self.Closed:
                     c.close()
                 elif all(c is not x.Connection for x in self.IdleConnections):
