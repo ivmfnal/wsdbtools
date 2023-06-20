@@ -78,8 +78,8 @@ class _WrappedConnection(object):
     def close(self):
         if self.Connection is not None:
             self.Connection.close()
-            self.Connection = None
-            self.Pool = None
+            self.Pool.returnConnection(self.Connection)     # return even if it is closed, just to update counts
+            self.Connection = self.Pool = None
 
     def cursor(self):
         # link the cursor back to the connection wrapper so the wrapper does not get deleted as long as at least one cursor is still active
@@ -108,6 +108,40 @@ class ConnectorBase(object):
     def connectionIsClosed(self, c):
         raise NotImplementedError
         
+class DummyConnection(object):
+    
+    Counter = 0
+
+    def __init__(self):
+        DummyConnection.Counter += 1
+        self.Closed = False
+        
+    def close(self):
+        if not self.Closed:
+            DummyConnection.Counter -= 1
+            self.Closed = True
+
+    def __del__(self):
+        self.close()
+
+class DummyConnector(ConnectorBase, Primitive):
+    
+    def __init__(self, max_connections):
+        Primitive.__init__(self)
+        self.MaxConnections = max_connections
+    
+    @synchronized
+    def connect(self):
+        if DummyConnection.Counter >= self.MaxConnections:
+            raise RuntimeError("Would exceed the connection limit")
+        return DummyConnection()
+    
+    def probe(self, connection):
+        return not connection.Closed
+    
+    def connectionIsClosed(self, connection):
+        return connection.Closed
+
 class PsycopgConnector(ConnectorBase):
 
     def __init__(self, connspec, schema=None):
@@ -116,9 +150,12 @@ class PsycopgConnector(ConnectorBase):
             if "url" in connspec:
                 self.Connstr = connspec["url"]
             else:
-                self.Connstr = "host=%(host)s port=%(port)s dbname=%(dbname)s user=%(user)s" % connspec
-                if "password" in connspec:
-                    self.Connstr += " password=%(password)s" % connspec
+                parts = [
+                    "%s=%s" % (key, connspec[key]) 
+                    for key in ["host", "port", "password", "dbname", "user"]
+                    if key in connspec
+                ]
+                self.Connstr = " ".join(parts)
             schema = schema or connspec.get("schema")
         else:
             # assume str
@@ -142,12 +179,14 @@ class PsycopgConnector(ConnectorBase):
         return conn.closed
         
     def probe(self, conn):
+
         try:
-            try:
-                # roll back unfinished transaction, if any, and ignore any errors
-                conn.rollback()
-            except:
-                pass
+            # roll back unfinished transaction, if any, and ignore any errors
+            conn.rollback()
+        except:
+            pass
+
+        try:
             # check if the transaction is alive
             c = conn.cursor()
             c.execute("select 1")
@@ -167,13 +206,15 @@ class MySQLConnector(ConnectorBase):
 
 class ConnectionPool(Primitive):      
 
-    def __init__(self, postgres=None, mysql=None, connector=None, 
-                idle_timeout = 30, max_idle_connections = 1, schema=None):
+    def __init__(self, postgres=None, mysql=None, connector=None, dummy=None,
+                idle_timeout=30, max_idle_connections=1, schema=None, max_connections=None):
         my_name = "ConnectionPool"
         Primitive.__init__(self, name=my_name)
         self.IdleTimeout = idle_timeout
         if connector is not None:
             self.Connector = connector
+        elif dummy is not None:
+            self.Connector = DummyConnector(dummy)
         elif postgres is not None:
             self.Connector = PsycopgConnector(postgres, schema)
         elif mysql is not None:
@@ -184,7 +225,14 @@ class ConnectionPool(Primitive):
         self.MaxIdleConnections = max_idle_connections
         self.Closed = False
         self.CleanUpJob = schedule_task(self.clean_up, interval=self.IdleTimeout/5)
-    
+        self.CheckedOutConnections = 0
+        self.MaxConnections = max_connections
+
+    @property
+    @synchronized
+    def open_connections_count(self):
+        return self.CheckedOutConnections + len(self.IdleConnections)
+
     @synchronized
     def close_idle(self):
         for ic in self.IdleConnections:
@@ -209,23 +257,30 @@ class ConnectionPool(Primitive):
         return len(self.IdleConnections)
 
     @synchronized
-    def connect(self):
-        if self.Closed:
-            raise RuntimeError("Connection pool is closed")
-        use_connection = None
-        #print "connect(): Connections=", self.IdleConnections
+    def get_idle_connection(self):
         while self.IdleConnections:
             c = self.IdleConnections.pop().Connection
             if self.Connector.probe(c):
-                use_connection = c
-                #print ("connect: reuse idle connection %s" % (c,))
-                break
+                return c
             else:
                 c.close()       # connection is bad
-        else:
-            # no connection found
+        return None
+
+    @synchronized
+    def connect(self, timeout=None):
+        if self.Closed:
+            raise RuntimeError("Connection pool is closed")
+        use_connection = self.get_idle_connection()
+        while use_connection is None \
+                and self.MaxConnections is not None and self.CheckedOutConnections >= self.MaxConnections:
+            if use_connection is None:
+                self.sleep(timeout)
+            if self.Closed:
+                raise RuntimeError("Connection pool is closed")
+            use_connection = self.get_idle_connection()
+        if use_connection is None:
             use_connection = self.Connector.connect()
-            #print ("connect: new connection %s" % (use_connection,))
+        self.CheckedOutConnections += 1
         return _WrappedConnection(self, use_connection)
 
     def cursor(self):
@@ -236,22 +291,22 @@ class ConnectionPool(Primitive):
 
     txn = transaction
 
+    @synchronized
     def returnConnection(self, c):
-        #print("returnConnection() ...")
+        self.CheckedOutConnections -= 1
         if not self.Connector.connectionIsClosed(c):
-            with self:
-                #print("returnConnection: idle connections:", len(self.IdleConnections))
-                if len(self.IdleConnections) >= self.MaxIdleConnections or self.Closed:
-                    c.close()
-                elif all(c is not x.Connection for x in self.IdleConnections):
-                    self.IdleConnections.append(_IdleConnection(c))
-        #print("returnConnection() exit")
+            #print("returnConnection: idle connections:", len(self.IdleConnections))
+            if len(self.IdleConnections) >= self.MaxIdleConnections or self.Closed:
+                c.close()
+            elif all(c is not x.Connection for x in self.IdleConnections):
+                self.IdleConnections.append(_IdleConnection(c))
+        self.wakeup()
 
     @synchronized
     def close(self):
-            self.Closed = True
-            self.close_idle()
-            self.CleanUpJob.cancel()
+        self.Closed = True
+        self.close_idle()
+        self.CleanUpJob.cancel()
 
     def __del__(self):
         self.close()
