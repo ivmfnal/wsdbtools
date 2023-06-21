@@ -126,6 +126,8 @@ class DummyConnection(object):
 
 class DummyConnector(ConnectorBase, Primitive):
     
+    # used for debugging
+    
     def __init__(self, max_connections):
         Primitive.__init__(self)
         self.MaxConnections = max_connections
@@ -213,7 +215,7 @@ class ConnectionPool(Primitive):
         self.IdleTimeout = idle_timeout
         if connector is not None:
             self.Connector = connector
-        elif dummy is not None:
+        elif dummy is not None:                     # used for debugging
             self.Connector = DummyConnector(dummy)
         elif postgres is not None:
             self.Connector = PsycopgConnector(postgres, schema)
