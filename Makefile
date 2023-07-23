@@ -1,4 +1,4 @@
-VERSION=1.9.3
+VERSION=1.10.0
 TARDIR=/tmp/$(USER)
 TARFILE=$(TARDIR)/wsdbtools_$(VERSION).tar
 BUILDDIR=$(HOME)/build/wsdbtools

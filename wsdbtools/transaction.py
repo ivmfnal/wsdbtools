@@ -30,6 +30,24 @@ class Transaction(object):
             self.rollback()
             raise
 
+    def executemany(self, *params, **args):
+        if not self.InTransaction:
+            raise RuntimeError("Not in transaction")
+        try:
+            self.Cursor.execute(*params, **args)
+        except:
+            self.rollback()
+            raise
+
+    def copy_from(self, *params, **args):
+        if not self.InTransaction:
+            raise RuntimeError("Not in transaction")
+        try:
+            self.Cursor.copy_from(*params, **args)
+        except:
+            self.rollback()
+            raise
+
     def __enter__(self):
         self.begin()
         return self
@@ -44,15 +62,20 @@ class Transaction(object):
     def __getattr__(self, name):
         return getattr(self.Cursor, name)
         
+    def one(self):
+        return self.Cursor.fetchone()
+
     def cursor_iterator(self):
         while True:
-            tup = self.Cursor.fetchone()
+            tup = self.one()
             if tup is None:
                 break
             yield tup
 
+    results = cursor_iterator       # alias for clarity
+
     def __iter__(self):
-        return self.cursor_iterator()
+        return self.results()
         
     def __del__(self):
         #print("Transaction __del__")
@@ -61,4 +84,14 @@ class Transaction(object):
                 self.commit()
             elif self.OnDelete == "rollback":
                 self.rollback()
-            
+
+class ConnectionWithTransactions(object):
+    
+    def __init__(self, conn):
+        self.Connection = conn
+        
+    def transaction(self, **args):
+        return Transaction(self.Connection, **args)
+        
+    def __getattr__(self, name):
+        return getattr(self.Connection, name)
