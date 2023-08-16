@@ -209,7 +209,8 @@ class MySQLConnector(ConnectorBase):
 class ConnectionPool(Primitive):      
 
     def __init__(self, postgres=None, mysql=None, connector=None, dummy=None,
-                idle_timeout=30, max_idle_connections=1, schema=None, max_connections=None):
+                idle_timeout=5, max_idle_connections=1, schema=None, max_connections=None,
+                on_park="commit"):
         my_name = "ConnectionPool"
         Primitive.__init__(self, name=my_name)
         self.IdleTimeout = idle_timeout
@@ -229,6 +230,7 @@ class ConnectionPool(Primitive):
         self.CleanUpJob = schedule_task(self.clean_up, interval=self.IdleTimeout/5)
         self.CheckedOutConnections = 0
         self.MaxConnections = max_connections
+        self.OnPark = on_park
 
     @property
     @synchronized
@@ -301,6 +303,12 @@ class ConnectionPool(Primitive):
             if len(self.IdleConnections) >= self.MaxIdleConnections or self.Closed:
                 c.close()
             elif all(c is not x.Connection for x in self.IdleConnections):
+                try:
+                    if self.OnPark == "commit":
+                        c.commit()
+                    elif self.OnPark == "rollback":
+                        c.rollback()
+                except: pass                    
                 self.IdleConnections.append(_IdleConnection(c))
         self.wakeup()
 
