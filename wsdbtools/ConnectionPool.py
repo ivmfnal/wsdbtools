@@ -1,6 +1,6 @@
 import time
 from pythreader import Primitive, schedule_task, synchronized, version_info as pythreader_version
-assert pythreader_version >= (2,11,0), f"pythreader version >= 2.11.0 is required. Installed: {pythreader_version}"
+assert pythreader_version >= (2,11), f"pythreader version >= 2.11.0 is required. Installed: {pythreader_version}"
 
 from .transaction import Transaction
 
@@ -92,10 +92,10 @@ class _WrappedConnection(object):
     def __getattr__(self, name):
         return getattr(self.Connection, name)
 
-class _IdleConnection(object):
+class _ParkedConnection(object):
     def __init__(self, conn):
         self.Connection = conn          # db connection
-        self.IdleSince = time.time()
+        self.ParkedSince = time.time()
 
 class ConnectorBase(object):
 
@@ -210,7 +210,7 @@ class ConnectionPool(Primitive):
 
     def __init__(self, postgres=None, mysql=None, connector=None, dummy=None,
                 idle_timeout=5, max_idle_connections=1, schema=None, max_connections=None,
-                on_park="commit"):
+                on_park="rollback"):
         my_name = "ConnectionPool"
         Primitive.__init__(self, name=my_name)
         self.IdleTimeout = idle_timeout
@@ -224,10 +224,10 @@ class ConnectionPool(Primitive):
             self.Connector = MySQLConnector(mysql, schema)
         else:
             raise ValueError("Connector must be provided")
-        self.IdleConnections = []           # [_IdleConnection(c), ...]
-        self.MaxIdleConnections = max_idle_connections
+        self.ParkedConnections = []           # [_ParkedConnection(c), ...]
+        self.MaxParkedConnections = max_idle_connections
         self.Closed = False
-        self.CleanUpJob = schedule_task(self.clean_up, interval=self.IdleTimeout/5)
+        self.CleanUpJob = schedule_task(self.clean_up, interval=self.IdleTimeout)
         self.CheckedOutConnections = 0
         self.MaxConnections = max_connections
         self.OnPark = on_park
@@ -235,35 +235,35 @@ class ConnectionPool(Primitive):
     @property
     @synchronized
     def open_connections_count(self):
-        return self.CheckedOutConnections + len(self.IdleConnections)
+        return self.CheckedOutConnections + len(self.ParkedConnections)
 
     @synchronized
     def close_idle(self):
-        for ic in self.IdleConnections:
+        for ic in self.ParkedConnections:
             ic.Connection.close()
-        self.IdleConnections = []
+        self.ParkedConnections = []
 
     @synchronized
     def clean_up(self):
         now = time.time()
         new_list = []
-        for ic in self.IdleConnections:
-            t = ic.IdleSince
+        for ic in self.ParkedConnections:
+            t = ic.ParkedSince
             c = ic.Connection
             if t < now - self.IdleTimeout:
                 #print ("closing idle connection %x" % (id(c),))
                 c.close()
             else:
                 new_list.append(ic)
-        self.IdleConnections = new_list
+        self.ParkedConnections = new_list
 
     def idleCount(self):
-        return len(self.IdleConnections)
+        return len(self.ParkedConnections)
 
     @synchronized
     def get_idle_connection(self):
-        while self.IdleConnections:
-            c = self.IdleConnections.pop().Connection
+        while self.ParkedConnections:
+            c = self.ParkedConnections.pop().Connection
             if self.Connector.probe(c):
                 return c
             else:
@@ -277,8 +277,7 @@ class ConnectionPool(Primitive):
         use_connection = self.get_idle_connection()
         while use_connection is None \
                 and self.MaxConnections is not None and self.CheckedOutConnections >= self.MaxConnections:
-            if use_connection is None:
-                self.sleep(timeout)
+            self.sleep(timeout)
             if self.Closed:
                 raise RuntimeError("Connection pool is closed")
             use_connection = self.get_idle_connection()
@@ -299,17 +298,17 @@ class ConnectionPool(Primitive):
     def returnConnection(self, c):
         self.CheckedOutConnections -= 1
         if not self.Connector.connectionIsClosed(c):
-            #print("returnConnection: idle connections:", len(self.IdleConnections))
-            if len(self.IdleConnections) >= self.MaxIdleConnections or self.Closed:
+            #print("returnConnection: idle connections:", len(self.ParkedConnections))
+            if len(self.ParkedConnections) >= self.MaxParkedConnections or self.Closed:
                 c.close()
-            elif all(c is not x.Connection for x in self.IdleConnections):
+            elif all(c is not x.Connection for x in self.ParkedConnections):
                 try:
                     if self.OnPark == "commit":
                         c.commit()
                     elif self.OnPark == "rollback":
                         c.rollback()
                 except: pass                    
-                self.IdleConnections.append(_IdleConnection(c))
+                self.ParkedConnections.append(_ParkedConnection(c))
         self.wakeup()
 
     @synchronized
